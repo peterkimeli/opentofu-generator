@@ -119,8 +119,10 @@ jobs:
             done
           } >> "$GITHUB_STEP_SUMMARY"
 
+      # Best effort: the logs are also in the job summary and the run log.
       - uses: actions/upload-artifact@v4
         if: always()
+        continue-on-error: true
         with:
           name: tofu-logs-${{ github.run_id }}
           path: logs/
