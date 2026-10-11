@@ -11,3 +11,4 @@ infra/build/
 deploy/
 *.zip
 aws/
+!evidence/*.log

@@ -1,0 +1,27 @@
+# GitHub Actions run 38171671673
+2026-10-11T20:21:27.5264811Z ##[group]Run set +e
+set +e
+tofu plan -detailed-exitcode -no-color 2>&1 | tee ../logs/2-plan.log
+code="${PIPESTATUS[0]}"
+case "$code" in
+  0) echo "::notice::Second plan reports no changes" ;;
+  2) echo "::error::Second plan is not empty - configuration is not idempotent"; exit 1 ;;
+  *) exit "$code" ;;
+esac
+data.archive_file.function_process_orders: Reading...
+data.archive_file.function_process_orders: Read complete after 0s [id=e9d0cd86c256487a1b4cd0f7f9747f252586f63b]
+aws_cloudwatch_log_group.function_process_orders: Refreshing state... [id=/aws/lambda/process-orders]
+data.aws_caller_identity.current: Reading...
+data.aws_iam_policy_document.lambda_assume_role: Reading...
+aws_sqs_queue.queue_order_events: Refreshing state... [id=https://sqs.eu-north-1.amazonaws.com/438546836992/order-events]
+data.aws_partition.current: Reading...
+data.aws_partition.current: Read complete after 0s [id=aws]
+data.aws_iam_policy_document.lambda_assume_role: Read complete after 0s [id=2690255455]
+aws_iam_role.function_process_orders: Refreshing state... [id=process-orders-role]
+data.aws_caller_identity.current: Read complete after 0s [id=438546836992]
+aws_s3_bucket.bucket_reports_archive: Refreshing state... [id=reports-archive-438546836992-eu-north-1]
+aws_iam_role_policy_attachment.function_process_orders: Refreshing state... [id=process-orders-role/arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole]
+aws_lambda_function.function_process_orders: Refreshing state... [id=process-orders]
+
+No changes. Your infrastructure matches the configuration.
+##[notice]Second plan reports no changes
