@@ -9,9 +9,12 @@ on:
 permissions:
   contents: read
 
+env:
+  TOFU_VERSION: 1.13.1
+
 jobs:
   test:
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
 
@@ -23,3 +26,47 @@ jobs:
       - run: npm ci
       - run: npm run typecheck
       - run: npm test
+
+  generate:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - uses: opentofu/setup-opentofu@v1
+        with:
+          tofu_version: ${{ env.TOFU_VERSION }}
+          tofu_wrapper: false
+
+      - run: npm ci
+
+      - name: Committed main.tf is up to date
+        run: |
+          npm run generate
+          git diff --exit-code infra/main.tf
+
+      - name: Output is identical across runs
+        run: |
+          npx tsx src/index.ts examples/input.json > /tmp/run1.tf
+          npx tsx src/index.ts examples/input.json > /tmp/run2.tf
+          diff /tmp/run1.tf /tmp/run2.tf
+
+      - name: tofu fmt and validate (example)
+        working-directory: infra
+        run: |
+          tofu fmt -check -diff
+          tofu init -backend=false -input=false
+          tofu validate
+
+      - name: tofu fmt and validate (edge cases)
+        run: |
+          mkdir -p /tmp/edge
+          npx tsx src/index.ts examples/edge-cases.json /tmp/edge/main.tf
+          cd /tmp/edge
+          tofu fmt -check -diff
+          tofu init -backend=false -input=false
+          tofu validate

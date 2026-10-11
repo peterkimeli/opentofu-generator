@@ -1,0 +1,16 @@
+{
+  "region": "eu-west-1",
+  "resources": [
+    { "type": "object-store", "name": "Reports Archive" },
+    { "type": "object-store", "name": "Reports Archive" },
+    { "type": "object-store", "name": "reports_archive" },
+    { "type": "queue", "name": "Order Events" },
+    { "type": "queue", "name": "Order Events" },
+    { "type": "queue", "name": "Order \"Events\" ${not.interpolated}" },
+    { "type": "queue", "name": "???" },
+    { "type": "function", "name": "Process Orders", "runtime": "python3.12" },
+    { "type": "function", "name": "Process Orders", "runtime": "nodejs22.x" },
+    { "type": "function", "name": "A very long function name that is far beyond the sixty four character Lambda limit", "runtime": "python3.13" },
+    { "type": "object-store", "name": "2024 Café Données — archive" }
+  ]
+}

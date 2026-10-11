@@ -7,3 +7,4 @@ crash.log
 build/
 *.log
 docs/
+infra/build/
