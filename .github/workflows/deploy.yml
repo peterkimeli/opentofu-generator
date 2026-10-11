@@ -5,14 +5,19 @@ name: Deploy
 on:
   workflow_dispatch:
     inputs:
+      region:
+        description: Override the input's region (empty = repo variable DEPLOY_REGION, else the input file)
+        type: string
+        default: ""
       destroy:
         description: Destroy the stack at the end of the run
         type: boolean
         default: true
 
+# AWS credentials come from the self-hosted runner's EC2 instance role (see
+# bootstrap/aws-bootstrap.yaml), so no AWS keys are stored in GitHub.
 permissions:
   contents: read
-  id-token: write # OIDC login to AWS, no stored keys
 
 concurrency:
   group: deploy
@@ -43,33 +48,35 @@ jobs:
           tofu_version: ${{ env.TOFU_VERSION }}
           tofu_wrapper: false
 
-      - name: Generate main.tf and check it matches the committed one
+      - name: Check committed main.tf is up to date
         run: |
           npm ci
           npm run generate
           git diff --exit-code infra/main.tf
-          echo "AWS_REGION=$(jq -r .region examples/input.json)" >> "$GITHUB_ENV"
-          mkdir -p logs
 
-      - uses: aws-actions/configure-aws-credentials@v4
-        with:
-          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
-          aws-region: ${{ env.AWS_REGION }}
-          role-session-name: opentofu-generator-${{ github.run_id }}
+      - name: Generate deploy/main.tf
+        env:
+          REGION: ${{ inputs.region || vars.DEPLOY_REGION }}
+        run: |
+          mkdir -p logs
+          npx tsx src/index.ts examples/input.json deploy/main.tf ${REGION:+--region "$REGION"}
+          cp infra/.terraform.lock.hcl deploy/
+          echo "Differences from the committed infra/main.tf (region override only):"
+          diff infra/main.tf deploy/main.tf | tee logs/region-diff.txt || true
 
       - name: tofu init
         id: init
-        working-directory: infra
+        working-directory: deploy
         run: tofu init -no-color 2>&1 | tee ../logs/0-init.log; exit "${PIPESTATUS[0]}"
 
       - name: tofu apply
         id: apply
-        working-directory: infra
+        working-directory: deploy
         run: tofu apply -auto-approve -no-color 2>&1 | tee ../logs/1-apply.log; exit "${PIPESTATUS[0]}"
 
       - name: tofu plan (second run must report no changes)
         id: plan
-        working-directory: infra
+        working-directory: deploy
         run: |
           set +e
           tofu plan -detailed-exitcode -no-color 2>&1 | tee ../logs/2-plan.log
@@ -85,12 +92,12 @@ jobs:
       - name: tofu destroy
         id: destroy
         if: always() && steps.init.outcome == 'success' && inputs.destroy
-        working-directory: infra
+        working-directory: deploy
         run: tofu destroy -auto-approve -no-color 2>&1 | tee ../logs/3-destroy.log; exit "${PIPESTATUS[0]}"
 
       - name: Check nothing is left in state
         if: always() && steps.destroy.outcome == 'success'
-        working-directory: infra
+        working-directory: deploy
         run: |
           left="$(tofu state list)"
           if [ -n "$left" ]; then echo "::error::Resources still in state:"; echo "$left"; exit 1; fi

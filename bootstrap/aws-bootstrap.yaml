@@ -1,71 +1,39 @@
 AWSTemplateFormatVersion: "2010-09-09"
 Description: >-
-  One-time setup for opentofu-generator: lets GitHub Actions deploy through
-  OIDC (no stored keys) with a least-privilege role, and optionally starts a
-  free-tier EC2 instance as a self-hosted GitHub Actions runner.
+  One-time setup for opentofu-generator: an EC2 self-hosted GitHub Actions
+  runner whose instance role carries the least-privilege permissions needed to
+  apply and destroy the generated stack. No AWS keys are stored in GitHub.
 
 Parameters:
   GitHubRepo:
     Type: String
     Default: peterkimeli/opentofu-generator
-    Description: owner/repo allowed to assume the deploy role
-  CreateOIDCProvider:
-    Type: String
-    AllowedValues: ["true", "false"]
-    Default: "true"
-    Description: Set to false if this account already has the token.actions.githubusercontent.com provider
-  CreateRunner:
-    Type: String
-    AllowedValues: ["true", "false"]
-    Default: "false"
-    Description: Start an EC2 self-hosted runner (only needed if GitHub-hosted runners are unavailable)
+    Description: owner/repo the runner registers with
   RunnerToken:
     Type: String
     NoEcho: true
-    Default: ""
-    Description: GitHub runner registration token (valid for 1 hour). Required when CreateRunner is true.
+    Description: GitHub runner registration token (valid for 1 hour)
   InstanceType:
     Type: String
-    Default: t3.micro
+    Default: t3.small
   UbuntuAmi:
     Type: AWS::SSM::Parameter::Value<AWS::EC2::Image::Id>
     Default: /aws/service/canonical/ubuntu/server/24.04/stable/current/amd64/hvm/ebs-gp3/ami-id
 
-Conditions:
-  MakeProvider: !Equals [!Ref CreateOIDCProvider, "true"]
-  MakeRunner: !Equals [!Ref CreateRunner, "true"]
-
 Resources:
-  GitHubOIDCProvider:
-    Type: AWS::IAM::OIDCProvider
-    Condition: MakeProvider
-    Properties:
-      Url: https://token.actions.githubusercontent.com
-      ClientIdList: [sts.amazonaws.com]
-      ThumbprintList:
-        - 6938fd4d98bab03faadb97b34396831e3780aea1
-        - 1c58a3a8518e8759bf075b76b750d4f2df264fcd
-
-  DeployRole:
+  RunnerRole:
     Type: AWS::IAM::Role
     Properties:
-      RoleName: opentofu-generator-deploy
-      MaxSessionDuration: 3600
+      RoleName: opentofu-generator-runner
       AssumeRolePolicyDocument:
         Version: "2012-10-17"
         Statement:
           - Effect: Allow
-            Principal:
-              Federated: !If
-                - MakeProvider
-                - !Ref GitHubOIDCProvider
-                - !Sub arn:${AWS::Partition}:iam::${AWS::AccountId}:oidc-provider/token.actions.githubusercontent.com
-            Action: sts:AssumeRoleWithWebIdentity
-            Condition:
-              StringEquals:
-                token.actions.githubusercontent.com:aud: sts.amazonaws.com
-              StringLike:
-                token.actions.githubusercontent.com:sub: !Sub repo:${GitHubRepo}:*
+            Principal: { Service: ec2.amazonaws.com }
+            Action: sts:AssumeRole
+      # Session Manager access for debugging the instance.
+      ManagedPolicyArns:
+        - !Sub arn:${AWS::Partition}:iam::aws:policy/AmazonSSMManagedInstanceCore
       Policies:
         - PolicyName: generated-stack
           PolicyDocument:
@@ -125,40 +93,19 @@ Resources:
                   StringEquals:
                     iam:PassedToService: lambda.amazonaws.com
 
-  # ---------- optional self-hosted runner ----------
-
-  RunnerRole:
-    Type: AWS::IAM::Role
-    Condition: MakeRunner
-    Properties:
-      AssumeRolePolicyDocument:
-        Version: "2012-10-17"
-        Statement:
-          - Effect: Allow
-            Principal: { Service: ec2.amazonaws.com }
-            Action: sts:AssumeRole
-      # Session Manager access for debugging only; deploys still go through OIDC.
-      ManagedPolicyArns:
-        - !Sub arn:${AWS::Partition}:iam::aws:policy/AmazonSSMManagedInstanceCore
-
   RunnerProfile:
     Type: AWS::IAM::InstanceProfile
-    Condition: MakeRunner
     Properties:
       Roles: [!Ref RunnerRole]
 
+  # No ingress rules; the default egress rule allows outbound traffic only.
   RunnerSecurityGroup:
     Type: AWS::EC2::SecurityGroup
-    Condition: MakeRunner
     Properties:
-      GroupDescription: GitHub Actions runner - outbound only, no inbound
-      SecurityGroupEgress:
-        - IpProtocol: "-1"
-          CidrIp: 0.0.0.0/0
+      GroupDescription: GitHub Actions runner - outbound only
 
   Runner:
     Type: AWS::EC2::Instance
-    Condition: MakeRunner
     Properties:
       ImageId: !Ref UbuntuAmi
       InstanceType: !Ref InstanceType
@@ -177,7 +124,6 @@ Resources:
           set -euxo pipefail
           exec > /var/log/runner-setup.log 2>&1
 
-          # 1 GB RAM is tight for npm + tofu; add swap.
           fallocate -l 2G /swapfile && chmod 600 /swapfile && mkswap /swapfile && swapon /swapfile
 
           apt-get update -y
@@ -201,9 +147,7 @@ Resources:
           ./svc.sh start
 
 Outputs:
-  DeployRoleArn:
-    Description: Save this as the GitHub repo secret AWS_ROLE_ARN
-    Value: !GetAtt DeployRole.Arn
   RunnerInstanceId:
-    Condition: MakeRunner
     Value: !Ref Runner
+  RunnerRoleArn:
+    Value: !GetAtt RunnerRole.Arn
