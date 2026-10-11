@@ -1,0 +1,120 @@
+name: Deploy
+
+# Runs the full lifecycle the task asks for, in one job so state never has to
+# leave the runner: apply -> plan (must report no changes) -> destroy.
+on:
+  workflow_dispatch:
+    inputs:
+      destroy:
+        description: Destroy the stack at the end of the run
+        type: boolean
+        default: true
+
+permissions:
+  contents: read
+  id-token: write # OIDC login to AWS, no stored keys
+
+concurrency:
+  group: deploy
+  cancel-in-progress: false
+
+env:
+  TOFU_VERSION: 1.13.1
+  TF_IN_AUTOMATION: "true"
+  TF_INPUT: "false"
+
+jobs:
+  lifecycle:
+    # Set the repo variable RUNNER_LABEL (e.g. "self-hosted") to use another runner.
+    runs-on: ${{ vars.RUNNER_LABEL || 'ubuntu-24.04' }}
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - uses: opentofu/setup-opentofu@v1
+        with:
+          tofu_version: ${{ env.TOFU_VERSION }}
+          tofu_wrapper: false
+
+      - name: Generate main.tf and check it matches the committed one
+        run: |
+          npm ci
+          npm run generate
+          git diff --exit-code infra/main.tf
+          echo "AWS_REGION=$(jq -r .region examples/input.json)" >> "$GITHUB_ENV"
+          mkdir -p logs
+
+      - uses: aws-actions/configure-aws-credentials@v4
+        with:
+          role-to-assume: ${{ secrets.AWS_ROLE_ARN }}
+          aws-region: ${{ env.AWS_REGION }}
+          role-session-name: opentofu-generator-${{ github.run_id }}
+
+      - name: tofu init
+        id: init
+        working-directory: infra
+        run: tofu init -no-color 2>&1 | tee ../logs/0-init.log; exit "${PIPESTATUS[0]}"
+
+      - name: tofu apply
+        id: apply
+        working-directory: infra
+        run: tofu apply -auto-approve -no-color 2>&1 | tee ../logs/1-apply.log; exit "${PIPESTATUS[0]}"
+
+      - name: tofu plan (second run must report no changes)
+        id: plan
+        working-directory: infra
+        run: |
+          set +e
+          tofu plan -detailed-exitcode -no-color 2>&1 | tee ../logs/2-plan.log
+          code="${PIPESTATUS[0]}"
+          case "$code" in
+            0) echo "::notice::Second plan reports no changes" ;;
+            2) echo "::error::Second plan is not empty - configuration is not idempotent"; exit 1 ;;
+            *) exit "$code" ;;
+          esac
+
+      # Runs even if apply or plan failed, so a broken run never leaves
+      # resources behind in the account.
+      - name: tofu destroy
+        id: destroy
+        if: always() && steps.init.outcome == 'success' && inputs.destroy
+        working-directory: infra
+        run: tofu destroy -auto-approve -no-color 2>&1 | tee ../logs/3-destroy.log; exit "${PIPESTATUS[0]}"
+
+      - name: Check nothing is left in state
+        if: always() && steps.destroy.outcome == 'success'
+        working-directory: infra
+        run: |
+          left="$(tofu state list)"
+          if [ -n "$left" ]; then echo "::error::Resources still in state:"; echo "$left"; exit 1; fi
+          echo "State is empty after destroy"
+
+      - name: Summary
+        if: always()
+        run: |
+          {
+            echo "## Lifecycle"
+            echo "| Step | Result |"
+            echo "|---|---|"
+            echo "| apply | ${{ steps.apply.outcome }} |"
+            echo "| plan (no changes) | ${{ steps.plan.outcome }} |"
+            echo "| destroy | ${{ steps.destroy.outcome }} |"
+            for f in logs/1-apply.log logs/2-plan.log logs/3-destroy.log; do
+              [ -f "$f" ] || continue
+              echo; echo "### $f"; echo '```'; tail -n 25 "$f"; echo '```'
+            done
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: tofu-logs-${{ github.run_id }}
+          path: logs/
+          if-no-files-found: ignore

@@ -14,7 +14,7 @@ env:
 
 jobs:
   test:
-    runs-on: ubuntu-24.04
+    runs-on: ${{ vars.RUNNER_LABEL || 'ubuntu-24.04' }}
     steps:
       - uses: actions/checkout@v4
 
@@ -28,7 +28,7 @@ jobs:
       - run: npm test
 
   generate:
-    runs-on: ubuntu-24.04
+    runs-on: ${{ vars.RUNNER_LABEL || 'ubuntu-24.04' }}
     steps:
       - uses: actions/checkout@v4
 

@@ -1,0 +1,209 @@
+AWSTemplateFormatVersion: "2010-09-09"
+Description: >-
+  One-time setup for opentofu-generator: lets GitHub Actions deploy through
+  OIDC (no stored keys) with a least-privilege role, and optionally starts a
+  free-tier EC2 instance as a self-hosted GitHub Actions runner.
+
+Parameters:
+  GitHubRepo:
+    Type: String
+    Default: peterkimeli/opentofu-generator
+    Description: owner/repo allowed to assume the deploy role
+  CreateOIDCProvider:
+    Type: String
+    AllowedValues: ["true", "false"]
+    Default: "true"
+    Description: Set to false if this account already has the token.actions.githubusercontent.com provider
+  CreateRunner:
+    Type: String
+    AllowedValues: ["true", "false"]
+    Default: "false"
+    Description: Start an EC2 self-hosted runner (only needed if GitHub-hosted runners are unavailable)
+  RunnerToken:
+    Type: String
+    NoEcho: true
+    Default: ""
+    Description: GitHub runner registration token (valid for 1 hour). Required when CreateRunner is true.
+  InstanceType:
+    Type: String
+    Default: t3.micro
+  UbuntuAmi:
+    Type: AWS::SSM::Parameter::Value<AWS::EC2::Image::Id>
+    Default: /aws/service/canonical/ubuntu/server/24.04/stable/current/amd64/hvm/ebs-gp3/ami-id
+
+Conditions:
+  MakeProvider: !Equals [!Ref CreateOIDCProvider, "true"]
+  MakeRunner: !Equals [!Ref CreateRunner, "true"]
+
+Resources:
+  GitHubOIDCProvider:
+    Type: AWS::IAM::OIDCProvider
+    Condition: MakeProvider
+    Properties:
+      Url: https://token.actions.githubusercontent.com
+      ClientIdList: [sts.amazonaws.com]
+      ThumbprintList:
+        - 6938fd4d98bab03faadb97b34396831e3780aea1
+        - 1c58a3a8518e8759bf075b76b750d4f2df264fcd
+
+  DeployRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: opentofu-generator-deploy
+      MaxSessionDuration: 3600
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Federated: !If
+                - MakeProvider
+                - !Ref GitHubOIDCProvider
+                - !Sub arn:${AWS::Partition}:iam::${AWS::AccountId}:oidc-provider/token.actions.githubusercontent.com
+            Action: sts:AssumeRoleWithWebIdentity
+            Condition:
+              StringEquals:
+                token.actions.githubusercontent.com:aud: sts.amazonaws.com
+              StringLike:
+                token.actions.githubusercontent.com:sub: !Sub repo:${GitHubRepo}:*
+      Policies:
+        - PolicyName: generated-stack
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              # Buckets are always named "<name>-<account id>-<region>".
+              - Sid: S3
+                Effect: Allow
+                Action: s3:*
+                Resource:
+                  - !Sub arn:${AWS::Partition}:s3:::*-${AWS::AccountId}-*
+                  - !Sub arn:${AWS::Partition}:s3:::*-${AWS::AccountId}-*/*
+              - Sid: SQS
+                Effect: Allow
+                Action: sqs:*
+                Resource: !Sub arn:${AWS::Partition}:sqs:*:${AWS::AccountId}:*
+              - Sid: Lambda
+                Effect: Allow
+                Action: lambda:*
+                Resource: !Sub arn:${AWS::Partition}:lambda:*:${AWS::AccountId}:function:*
+              - Sid: LogGroups
+                Effect: Allow
+                Action: logs:*
+                Resource: !Sub arn:${AWS::Partition}:logs:*:${AWS::AccountId}:log-group:/aws/lambda/*
+              - Sid: LogsDescribe
+                Effect: Allow
+                Action: [logs:DescribeLogGroups, logs:ListTagsForResource]
+                Resource: "*"
+              # Only the Lambda execution roles the generator creates ("*-role").
+              - Sid: LambdaRoles
+                Effect: Allow
+                Action:
+                  - iam:CreateRole
+                  - iam:DeleteRole
+                  - iam:GetRole
+                  - iam:TagRole
+                  - iam:UntagRole
+                  - iam:UpdateRole
+                  - iam:UpdateAssumeRolePolicy
+                  - iam:ListRolePolicies
+                  - iam:ListAttachedRolePolicies
+                  - iam:ListInstanceProfilesForRole
+                  - iam:ListRoleTags
+                Resource: !Sub arn:${AWS::Partition}:iam::${AWS::AccountId}:role/*-role
+              - Sid: AttachBasicExecutionOnly
+                Effect: Allow
+                Action: [iam:AttachRolePolicy, iam:DetachRolePolicy]
+                Resource: !Sub arn:${AWS::Partition}:iam::${AWS::AccountId}:role/*-role
+                Condition:
+                  ArnEquals:
+                    iam:PolicyARN: !Sub arn:${AWS::Partition}:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+              - Sid: PassRoleToLambda
+                Effect: Allow
+                Action: iam:PassRole
+                Resource: !Sub arn:${AWS::Partition}:iam::${AWS::AccountId}:role/*-role
+                Condition:
+                  StringEquals:
+                    iam:PassedToService: lambda.amazonaws.com
+
+  # ---------- optional self-hosted runner ----------
+
+  RunnerRole:
+    Type: AWS::IAM::Role
+    Condition: MakeRunner
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal: { Service: ec2.amazonaws.com }
+            Action: sts:AssumeRole
+      # Session Manager access for debugging only; deploys still go through OIDC.
+      ManagedPolicyArns:
+        - !Sub arn:${AWS::Partition}:iam::aws:policy/AmazonSSMManagedInstanceCore
+
+  RunnerProfile:
+    Type: AWS::IAM::InstanceProfile
+    Condition: MakeRunner
+    Properties:
+      Roles: [!Ref RunnerRole]
+
+  RunnerSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Condition: MakeRunner
+    Properties:
+      GroupDescription: GitHub Actions runner - outbound only, no inbound
+      SecurityGroupEgress:
+        - IpProtocol: "-1"
+          CidrIp: 0.0.0.0/0
+
+  Runner:
+    Type: AWS::EC2::Instance
+    Condition: MakeRunner
+    Properties:
+      ImageId: !Ref UbuntuAmi
+      InstanceType: !Ref InstanceType
+      IamInstanceProfile: !Ref RunnerProfile
+      SecurityGroupIds: [!GetAtt RunnerSecurityGroup.GroupId]
+      MetadataOptions:
+        HttpTokens: required
+      BlockDeviceMappings:
+        - DeviceName: /dev/sda1
+          Ebs: { VolumeSize: 20, VolumeType: gp3, DeleteOnTermination: true }
+      Tags:
+        - { Key: Name, Value: opentofu-generator-runner }
+      UserData:
+        Fn::Base64: !Sub |
+          #!/bin/bash
+          set -euxo pipefail
+          exec > /var/log/runner-setup.log 2>&1
+
+          # 1 GB RAM is tight for npm + tofu; add swap.
+          fallocate -l 2G /swapfile && chmod 600 /swapfile && mkswap /swapfile && swapon /swapfile
+
+          apt-get update -y
+          apt-get install -y curl jq unzip git
+
+          useradd -m -s /bin/bash runner
+          cd /home/runner
+          VERSION=$(curl -fsSL https://api.github.com/repos/actions/runner/releases/latest | jq -r .tag_name | sed 's/^v//')
+          curl -fsSL -o runner.tgz "https://github.com/actions/runner/releases/download/v$VERSION/actions-runner-linux-x64-$VERSION.tar.gz"
+          tar xzf runner.tgz && rm runner.tgz
+          ./bin/installdependencies.sh
+          chown -R runner:runner /home/runner
+
+          sudo -u runner ./config.sh --unattended \
+            --url "https://github.com/${GitHubRepo}" \
+            --token "${RunnerToken}" \
+            --name "aws-ec2-$(hostname)" \
+            --labels "self-hosted,linux,x64,aws-ec2" \
+            --replace
+          ./svc.sh install runner
+          ./svc.sh start
+
+Outputs:
+  DeployRoleArn:
+    Description: Save this as the GitHub repo secret AWS_ROLE_ARN
+    Value: !GetAtt DeployRole.Arn
+  RunnerInstanceId:
+    Condition: MakeRunner
+    Value: !Ref Runner
