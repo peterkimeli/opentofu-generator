@@ -1,11 +1,4 @@
-2026-10-11T20:20:29.1489709Z ##[group]Run mkdir -p logs
-mkdir -p logs
-npx tsx src/index.ts examples/input.json deploy/main.tf ${REGION:+--region "$REGION"}
-cp infra/.terraform.lock.hcl deploy/
-echo "Differences from the committed infra/main.tf (region override only):"
-diff infra/main.tf deploy/main.tf | tee logs/region-diff.txt || true
-wrote deploy/main.tf
-Differences from the committed infra/main.tf (region override only):
+# diff infra/main.tf (example, us-east-1) vs the deployed file (--region eu-north-1)
 19c19
 <   region = "us-east-1"
 ---

@@ -1,13 +1,5 @@
-# GitHub Actions run 38171671673
-2026-10-11T20:21:27.5264811Z ##[group]Run set +e
-set +e
-tofu plan -detailed-exitcode -no-color 2>&1 | tee ../logs/2-plan.log
-code="${PIPESTATUS[0]}"
-case "$code" in
-  0) echo "::notice::Second plan reports no changes" ;;
-  2) echo "::error::Second plan is not empty - configuration is not idempotent"; exit 1 ;;
-  *) exit "$code" ;;
-esac
+# From GitHub Actions run https://github.com/peterkimeli/opentofu-generator/actions/runs/38171671673 (region eu-north-1)
+$ tofu plan -detailed-exitcode   # exit code 0 = no changes
 data.archive_file.function_process_orders: Reading...
 data.archive_file.function_process_orders: Read complete after 0s [id=e9d0cd86c256487a1b4cd0f7f9747f252586f63b]
 aws_cloudwatch_log_group.function_process_orders: Refreshing state... [id=/aws/lambda/process-orders]
@@ -24,4 +16,3 @@ aws_iam_role_policy_attachment.function_process_orders: Refreshing state... [id=
 aws_lambda_function.function_process_orders: Refreshing state... [id=process-orders]
 
 No changes. Your infrastructure matches the configuration.
-##[notice]Second plan reports no changes

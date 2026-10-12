@@ -1,6 +1,5 @@
-# GitHub Actions run 38171671673
-2026-10-11T20:21:37.4687977Z ##[group]Run tofu destroy -auto-approve -no-color 2>&1 | tee ../logs/3-destroy.log; exit "${PIPESTATUS[0]}"
-tofu destroy -auto-approve -no-color 2>&1 | tee ../logs/3-destroy.log; exit "${PIPESTATUS[0]}"
+# From GitHub Actions run https://github.com/peterkimeli/opentofu-generator/actions/runs/38171671673 (region eu-north-1)
+$ tofu destroy -auto-approve
 data.archive_file.function_process_orders: Reading...
 data.archive_file.function_process_orders: Read complete after 0s [id=e9d0cd86c256487a1b4cd0f7f9747f252586f63b]
 data.aws_caller_identity.current: Reading...
@@ -221,8 +220,5 @@ aws_sqs_queue.queue_order_events: Destruction complete after 43s
 
 Destroy complete! Resources: 6 destroyed.
 
-2026-10-11T20:22:34.7555682Z ##[group]Run left="$(tofu state list)"
-left="$(tofu state list)"
-if [ -n "$left" ]; then echo "::error::Resources still in state:"; echo "$left"; exit 1; fi
-echo "State is empty after destroy"
+$ tofu state list   # empty = nothing left
 State is empty after destroy

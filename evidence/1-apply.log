@@ -1,6 +1,5 @@
-# GitHub Actions run 38171671673 (self-hosted runner, eu-north-1)
-2026-10-11T20:20:50.0131196Z ##[group]Run tofu apply -auto-approve -no-color 2>&1 | tee ../logs/1-apply.log; exit "${PIPESTATUS[0]}"
-tofu apply -auto-approve -no-color 2>&1 | tee ../logs/1-apply.log; exit "${PIPESTATUS[0]}"
+# From GitHub Actions run https://github.com/peterkimeli/opentofu-generator/actions/runs/38171671673 (region eu-north-1)
+$ tofu apply -auto-approve
 data.archive_file.function_process_orders: Reading...
 data.archive_file.function_process_orders: Read complete after 0s [id=e9d0cd86c256487a1b4cd0f7f9747f252586f63b]
 data.aws_partition.current: Reading...
