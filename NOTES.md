@@ -1,16 +1,24 @@
-# What failed on the first deploy, and what I changed
+# Deployment notes
 
-The generated configuration worked on its first real run: apply created 6 resources, the second plan reported
-no changes, and destroy removed all 6 ([evidence/](evidence/)). The failures were in the environment around it:
+The generated `main.tf` itself deployed on the first real run: apply created 6 resources, the second plan showed
+no changes and destroy removed everything ([evidence/](evidence/)). Most of my problems were with the accounts I
+was deploying from, not the config.
 
-| # | What failed | What I changed |
-|---|---|---|
-| 1 | GitHub-hosted runners never started ("account is locked due to a billing issue"). | Ran CI and deploy on a self-hosted runner on EC2 ([bootstrap/aws-bootstrap.yaml](bootstrap/aws-bootstrap.yaml)). |
-| 2 | Creating the GitHub OIDC provider was denied by the AWS organization's SCP. | Gave the runner's EC2 instance role a least-privilege policy instead. No AWS keys are stored anywhere. |
-| 3 | S3, SQS, Lambda and EC2 are denied in us-east-1 by the same SCP; only eu-north-1 is allowed. | Added a `--region` override. `infra/main.tf` stays as the example (us-east-1); the deploy used eu-north-1. Only the two region strings differ ([evidence/region-diff.log](evidence/region-diff.log)). |
-| 4 | The runner setup stack failed: the console attached a restricted service role, and a security group with egress rules needs a `VpcId`. | Created the stack with my own credentials and dropped the explicit egress rule. |
-| 5 | Uploading the log artifact failed (storage quota on the same GitHub account). | Made the upload optional; the logs are in the job summary and in `evidence/`. |
+GitHub Actions wouldn't run at all. Every job failed straight away with "account is locked due to a billing
+issue". I couldn't get that resolved before the deadline, so I set up a self-hosted runner on a small EC2
+instance ([bootstrap/aws-bootstrap.yaml](bootstrap/aws-bootstrap.yaml)) and pointed both workflows at it.
 
-Problems I designed against up front, which commonly break destroy or the second plan: non-empty buckets
-(`force_destroy`), the log group Lambda creates on first invoke (now managed), a zip hash that changes between
-builds (`archive_file` uses fixed timestamps), and global bucket-name clashes (account id and region suffix).
+I wanted GitHub to log in to AWS with OIDC, but my AWS account is part of an organization whose SCP blocks
+creating the OIDC provider. I gave the runner's instance role a tight policy instead, so there are still no AWS
+keys stored in GitHub.
+
+The same SCP only allows S3, SQS, Lambda and EC2 in eu-north-1, so I couldn't deploy to us-east-1 as in the
+example. I added a `--region` flag: `infra/main.tf` is still generated from the example unchanged, the deploy used
+eu-north-1, and the only difference is the two region strings
+([evidence/region-diff.log](evidence/region-diff.log)).
+
+Smaller things: my first runner stack failed on a security group setting, and the log artifact upload hit a
+storage quota, so I made that step optional.
+
+Some things I handled up front because they usually break destroy or the second plan: `force_destroy` on the
+bucket, managing the Lambda log group myself, and a Lambda zip that builds identically every time.
